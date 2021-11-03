@@ -1,0 +1,16 @@
+name: grpc_pubsub
+description: Wrapper library around the gRPC based APIs for Google Pub/Sub.
+version: 0.9.0
+homepage: https://github.com/peiffer-innovations/grpc_pubsub
+
+environment:
+  sdk: ">=2.12.0 <3.0.0"
+
+dependencies:
+  grpc_googleapis: ^1.0.12
+  grpc_protobuf_convert: ^1.0.0
+  logging: ^1.0.2
+  meta: ^1.7.0
+
+dev_dependencies:
+  test: ^1.18.2
