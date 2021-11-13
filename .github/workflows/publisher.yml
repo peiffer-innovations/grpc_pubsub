@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/publisher.yaml
       - lib/**
+      - test/**
       - pubspec.yaml
 
 jobs:
