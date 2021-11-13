@@ -16,7 +16,7 @@ Future<void> main() async {
 
   test('no-op', () {});
 
-  if (serviceAccount != null) {
+  if (serviceAccount != null && serviceAccount.isNotEmpty) {
     Logger.root.onRecord.listen((record) {
       // ignore: avoid_print
       print('${record.level.name}: ${record.time}: ${record.message}');
