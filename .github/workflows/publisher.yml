@@ -25,13 +25,13 @@ jobs:
         with:
           flutter_package: true
 
-      # - name: Publish
-      #   uses: sakebook/actions-flutter-pub-publisher@v1.3.1
-      #   with:
-      #     credential: ${{ secrets.CREDENTIAL_JSON }}
-      #     flutter_package: true
-      #     skip_test: true
+      - name: Publish
+        uses: sakebook/actions-flutter-pub-publisher@v1.3.1
+        with:
+          credential: ${{ secrets.CREDENTIAL_JSON }}
+          flutter_package: true
+          skip_test: true
 
-      # - uses: CDDelta/dart-version-auto-tag@v1.0.1
-      #   with:
-      #     token: ${{ secrets.REPO_TOKEN }}
+      - uses: CDDelta/dart-version-auto-tag@v1.0.1
+        with:
+          token: ${{ secrets.REPO_TOKEN }}

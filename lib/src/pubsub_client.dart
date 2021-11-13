@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:grpc/grpc.dart';
 import 'package:grpc/grpc_or_grpcweb.dart';
 import 'package:grpc_googleapis/google/protobuf.dart' as pb;
@@ -29,6 +31,7 @@ class PubsubClient {
   final int _port;
   final List<String> _scopes;
   final String _serviceAccountJson;
+  final List<StreamSubscription> _subscriptions = [];
 
   late GrpcOrGrpcWebClientChannel _channel;
   bool _initialized = false;
@@ -48,26 +51,7 @@ class PubsubClient {
     if (!_initialized) {
       _logger.info('[initialize]: start');
 
-      var authenticator = ServiceAccountAuthenticator(
-        _serviceAccountJson,
-        _scopes,
-      );
-      _projectId = authenticator.projectId!;
-
-      _channel = GrpcOrGrpcWebClientChannel.grpc(
-        _host,
-        port: _port,
-      );
-
-      _publisherClient = PublisherClient(
-        _channel,
-        options: authenticator.toCallOptions,
-      );
-
-      _subscriberClient = SubscriberClient(
-        _channel,
-        options: authenticator.toCallOptions,
-      );
+      await _reconnect(closePrevious: false);
 
       _initialized = true;
       _logger.info('[initialize]: complete');
@@ -81,6 +65,10 @@ class PubsubClient {
       _logger.info('[dispose]: start');
 
       await _channel.shutdown();
+
+      _subscriptions.forEach((sub) => sub.cancel());
+      _subscriptions.clear();
+
       _initialized = false;
 
       _logger.info('[dispose]: complete');
@@ -98,17 +86,24 @@ class PubsubClient {
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<void> acknowledge({
     required Iterable<String> ackIds,
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     assert(ackIds.isNotEmpty);
     _logger.fine('[acknowledge]: start -- [$subscription]');
-    await _subscriberClient.acknowledge(AcknowledgeRequest(
-      ackIds: ackIds,
-      subscription: subscription.startsWith('projects/')
-          ? subscription
-          : 'projects/$_projectId/subscriptions/$subscription',
-    ));
+
+    await _execute(
+      executor: () async {
+        await _subscriberClient.acknowledge(AcknowledgeRequest(
+          ackIds: ackIds,
+          subscription: subscription.startsWith('projects/')
+              ? subscription
+              : 'projects/$_projectId/subscriptions/$subscription',
+        ));
+      },
+      retries: retries,
+    );
     _logger.fine('[acknowledge]: complete -- [$subscription]');
   }
 
@@ -134,6 +129,7 @@ class PubsubClient {
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<Snapshot> createSnapshot({
     required Map<String, String> labels,
+    int retries = 5,
     required String snapshot,
     required String subscription,
   }) async {
@@ -141,19 +137,24 @@ class PubsubClient {
     _logger.fine('[createSnapshot]: start -- [$subscription]');
 
     try {
-      var result = await _subscriberClient.createSnapshot(
-        CreateSnapshotRequest(
-          labels: labels,
-          name: snapshot.startsWith('projects/')
-              ? snapshot
-              : 'projects/$_projectId/snapshots/$snapshot',
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.createSnapshot(
+            CreateSnapshotRequest(
+              labels: labels,
+              name: snapshot.startsWith('projects/')
+                  ? snapshot
+                  : 'projects/$_projectId/snapshots/$snapshot',
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[createSnapshot]: complete -- [$subscription]');
     }
@@ -188,10 +189,11 @@ class PubsubClient {
     bool? enableMessageOrdering,
     ExpirationPolicy? expirationPolicy,
     String? filter,
-    required Map<String, String> labels,
+    Map<String, String>? labels,
     Duration? messageRetentionDuration,
     PushConfig? pushConfig,
     bool? retainAckedMessages,
+    int retries = 5,
     RetryPolicy? retryPolicy,
     String? subscription,
     required String topic,
@@ -201,35 +203,42 @@ class PubsubClient {
     _logger.fine('[createSubscription]: start -- [$subscription]');
 
     try {
-      var result = await _subscriberClient.createSubscription(
-        Subscription(
-          ackDeadlineSeconds: ackDeadlineSeconds,
-          deadLetterPolicy: deadLetterPolicy,
-          enableMessageOrdering: enableMessageOrdering,
-          expirationPolicy: expirationPolicy,
-          filter: filter,
-          labels: labels,
-          messageRetentionDuration: messageRetentionDuration == null
-              ? null
-              : GrpcProtobufConvert.toDuration(messageRetentionDuration),
-          name: subscription == null
-              ? null
-              : subscription.startsWith('projects/')
-                  ? subscription
-                  : 'projects/$_projectId/subscriptions/$subscription',
-          pushConfig: pushConfig,
-          retainAckedMessages: retainAckedMessages,
-          retryPolicy: retryPolicy,
-          topic: topic.startsWith('projects/')
-              ? topic
-              : 'projects/$_projectId/topics/$topic',
-          topicMessageRetentionDuration: topicMessageRetentionDuration == null
-              ? null
-              : GrpcProtobufConvert.toDuration(topicMessageRetentionDuration),
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.createSubscription(
+            Subscription(
+              ackDeadlineSeconds: ackDeadlineSeconds,
+              deadLetterPolicy: deadLetterPolicy,
+              enableMessageOrdering: enableMessageOrdering,
+              expirationPolicy: expirationPolicy,
+              filter: filter,
+              labels: labels,
+              messageRetentionDuration: messageRetentionDuration == null
+                  ? null
+                  : GrpcProtobufConvert.toDuration(messageRetentionDuration),
+              name: subscription == null
+                  ? null
+                  : subscription.startsWith('projects/')
+                      ? subscription
+                      : 'projects/$_projectId/subscriptions/$subscription',
+              pushConfig: pushConfig,
+              retainAckedMessages: retainAckedMessages,
+              retryPolicy: retryPolicy,
+              topic: topic.startsWith('projects/')
+                  ? topic
+                  : 'projects/$_projectId/topics/$topic',
+              topicMessageRetentionDuration:
+                  topicMessageRetentionDuration == null
+                      ? null
+                      : GrpcProtobufConvert.toDuration(
+                          topicMessageRetentionDuration),
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[createSubscription]: complete -- [$subscription]');
     }
@@ -247,6 +256,7 @@ class PubsubClient {
     Map<String, String>? labels,
     MessageStoragePolicy? messageStoragePolicy,
     String? kmsKeyName,
+    int retries = 5,
     SchemaSettings? schemaSettings,
     Duration? messageRetentionDuration,
     required String topic,
@@ -254,24 +264,29 @@ class PubsubClient {
     assert(_initialized);
     _logger.fine('[createTopic]: start -- [$topic]');
     try {
-      var request = Topic(
-        name: topic.startsWith('projects/')
-            ? topic
-            : 'projects/$_projectId/topics/$topic',
-        labels: labels,
-        messageStoragePolicy: messageStoragePolicy,
-        kmsKeyName: kmsKeyName,
-        schemaSettings: schemaSettings,
-        messageRetentionDuration: messageRetentionDuration == null
-            ? null
-            : GrpcProtobufConvert.toDuration(
-                messageRetentionDuration,
-              ),
+      return await _execute(
+        executor: () async {
+          var request = Topic(
+            name: topic.startsWith('projects/')
+                ? topic
+                : 'projects/$_projectId/topics/$topic',
+            labels: labels,
+            messageStoragePolicy: messageStoragePolicy,
+            kmsKeyName: kmsKeyName,
+            schemaSettings: schemaSettings,
+            messageRetentionDuration: messageRetentionDuration == null
+                ? null
+                : GrpcProtobufConvert.toDuration(
+                    messageRetentionDuration,
+                  ),
+          );
+
+          var result = await _publisherClient.createTopic(request);
+
+          return result;
+        },
+        retries: retries,
       );
-
-      var result = await _publisherClient.createTopic(request);
-
-      return result;
     } finally {
       _logger.fine('[createTopic]: complete -- [$topic]');
     }
@@ -289,18 +304,24 @@ class PubsubClient {
   /// The [snapshot] name can be just the simple name or it can be the fully
   /// quantified name in the format: `projects/{project}/snapshots/{snap}`.
   Future<void> deleteSnapshot({
+    int retries = 5,
     required String snapshot,
   }) async {
     assert(_initialized);
     _logger.fine('[deleteSnapshot]: start -- [$snapshot]');
 
     try {
-      await _subscriberClient.deleteSnapshot(
-        DeleteSnapshotRequest(
-          snapshot: snapshot.startsWith('projects/')
-              ? snapshot
-              : 'projects/$_projectId/snapshots/$snapshot',
-        ),
+      return await _execute(
+        executor: () async {
+          await _subscriberClient.deleteSnapshot(
+            DeleteSnapshotRequest(
+              snapshot: snapshot.startsWith('projects/')
+                  ? snapshot
+                  : 'projects/$_projectId/snapshots/$snapshot',
+            ),
+          );
+        },
+        retries: retries,
       );
     } finally {
       _logger.fine('[deleteSnapshot]: complete -- [$snapshot]');
@@ -317,18 +338,24 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<void> deleteSubscription({
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[deleteSubscription]: start -- [$subscription]');
 
     try {
-      await _subscriberClient.deleteSubscription(
-        DeleteSubscriptionRequest(
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
+      return await _execute(
+        executor: () async {
+          await _subscriberClient.deleteSubscription(
+            DeleteSubscriptionRequest(
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
+        },
+        retries: retries,
       );
     } finally {
       _logger.fine('[deleteSubscription]: complete -- [$subscription]');
@@ -344,12 +371,18 @@ class PubsubClient {
   /// subscriptions. Existing subscriptions to this topic are not deleted, but
   /// their topic field is set to `_deleted-topic_`.
   Future<void> deleteTopic({
+    int retries = 5,
     required String topic,
   }) async {
     assert(_initialized);
     _logger.fine('[deleteTopic]: start -- [$topic]');
     try {
-      await _publisherClient.deleteTopic(DeleteTopicRequest(topic: topic));
+      await _execute(
+        executor: () async {
+          await _publisherClient.deleteTopic(DeleteTopicRequest(topic: topic));
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[deleteTopic]: complete -- [$topic]');
     }
@@ -363,19 +396,25 @@ class PubsubClient {
   /// The [subscription] can be the simple name or the the fully quantified
   /// format: `projects/{project}/subscriptions/{subscription}`
   Future<DetachSubscriptionResponse> detachSubscription({
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[detachSubscription]: start -- [$subscription]');
     try {
-      var result =
-          await _publisherClient.detachSubscription(DetachSubscriptionRequest(
-        subscription: subscription.startsWith('projects/')
-            ? subscription
-            : 'projects/$_projectId/subscriptions/$subscription',
-      ));
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient
+              .detachSubscription(DetachSubscriptionRequest(
+            subscription: subscription.startsWith('projects/')
+                ? subscription
+                : 'projects/$_projectId/subscriptions/$subscription',
+          ));
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[detachSubscription]: complete -- [$subscription]');
     }
@@ -389,21 +428,27 @@ class PubsubClient {
   /// The [snapshot] name can be just the simple name or it can be the fully
   /// quantified name in the format: `projects/{project}/snapshots/{snap}`.
   Future<Snapshot> getSnapshot({
+    int retries = 5,
     required String snapshot,
   }) async {
     assert(_initialized);
     _logger.fine('[getSnapshot]: start -- [$snapshot]');
 
     try {
-      var result = await _subscriberClient.getSnapshot(
-        GetSnapshotRequest(
-          snapshot: snapshot.startsWith('projects/')
-              ? snapshot
-              : 'projects/$_projectId/snapshots/$snapshot',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.getSnapshot(
+            GetSnapshotRequest(
+              snapshot: snapshot.startsWith('projects/')
+                  ? snapshot
+                  : 'projects/$_projectId/snapshots/$snapshot',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[getSnapshot]: complete -- [$snapshot]');
     }
@@ -415,21 +460,27 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<Subscription> getSubscription({
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[getSubscription]: start -- [$subscription]');
 
     try {
-      var result = await _subscriberClient.getSubscription(
-        GetSubscriptionRequest(
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.getSubscription(
+            GetSubscriptionRequest(
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[getSubscription]: complete -- [$subscription]');
     }
@@ -438,19 +489,27 @@ class PubsubClient {
   /// Gets the configuration of a [topic].  The name of the topic can be the
   /// simple name or it can be the fully quantified format:
   /// `projects/{project}/topics/{topic}`.
-  Future<Topic> getTopic({required String topic}) async {
+  Future<Topic> getTopic({
+    int retries = 5,
+    required String topic,
+  }) async {
     assert(_initialized);
     _logger.fine('[getTopic]: start -- [$topic]');
     try {
-      var result = await _publisherClient.getTopic(
-        GetTopicRequest(
-          topic: topic.startsWith('projects/')
-              ? topic
-              : 'projects/$_projectId/topics/$topic',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient.getTopic(
+            GetTopicRequest(
+              topic: topic.startsWith('projects/')
+                  ? topic
+                  : 'projects/$_projectId/topics/$topic',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[getTopic]: complete -- [$topic]');
     }
@@ -469,23 +528,29 @@ class PubsubClient {
     int? pageSize,
     String? pageToken,
     String? project,
+    int retries = 5,
   }) async {
     assert(_initialized);
     var projectId = project ?? _projectId;
     _logger.fine('[listSnapshots]: start -- [$projectId]');
 
     try {
-      var result = await _subscriberClient.listSnapshots(
-        ListSnapshotsRequest(
-          pageSize: pageSize,
-          pageToken: pageToken,
-          project: projectId.startsWith('projects/')
-              ? projectId
-              : 'projects/$projectId',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.listSnapshots(
+            ListSnapshotsRequest(
+              pageSize: pageSize,
+              pageToken: pageToken,
+              project: projectId.startsWith('projects/')
+                  ? projectId
+                  : 'projects/$projectId',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[listSnapshots]: complete -- [$projectId]');
     }
@@ -496,27 +561,33 @@ class PubsubClient {
   /// If set, the [project] can be either just the project id or it can be the
   /// fully quantified format: `projects/{project}`.  If not set, the project
   /// from the service account will be used.
-  Future<ListSnapshotsResponse> listSubscriptions({
+  Future<ListSubscriptionsResponse> listSubscriptions({
     int? pageSize,
     String? pageToken,
     String? project,
+    int retries = 5,
   }) async {
     assert(_initialized);
     var projectId = project ?? _projectId;
     _logger.fine('[listSubscriptions]: start -- [$projectId]');
 
     try {
-      var result = await _subscriberClient.listSnapshots(
-        ListSnapshotsRequest(
-          pageSize: pageSize,
-          pageToken: pageToken,
-          project: projectId.startsWith('projects/')
-              ? projectId
-              : 'projects/$projectId',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.listSubscriptions(
+            ListSubscriptionsRequest(
+              pageSize: pageSize,
+              pageToken: pageToken,
+              project: projectId.startsWith('projects/')
+                  ? projectId
+                  : 'projects/$projectId',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[listSubscriptions]: complete -- [$projectId]');
     }
@@ -532,22 +603,28 @@ class PubsubClient {
   Future<ListTopicSnapshotsResponse> listTopicSnapshots({
     int? pageSize,
     String? pageToken,
+    int retries = 5,
     required String topic,
   }) async {
     assert(_initialized);
     _logger.fine('[listTopicSnapshots]: start -- [$topic]');
     try {
-      var result = await _publisherClient.listTopicSnapshots(
-        ListTopicSnapshotsRequest(
-          pageSize: pageSize,
-          pageToken: pageToken,
-          topic: topic.startsWith('projects/')
-              ? topic
-              : 'projects/$_projectId/topics/$topic',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient.listTopicSnapshots(
+            ListTopicSnapshotsRequest(
+              pageSize: pageSize,
+              pageToken: pageToken,
+              topic: topic.startsWith('projects/')
+                  ? topic
+                  : 'projects/$_projectId/topics/$topic',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[listTopicSnapshots]: complete -- [$topic]');
     }
@@ -560,22 +637,28 @@ class PubsubClient {
   Future<ListTopicSubscriptionsResponse> listTopicSubscriptions({
     int? pageSize,
     String? pageToken,
+    int retries = 5,
     required String topic,
   }) async {
     assert(_initialized);
     _logger.fine('[listTopicSubscriptions]: start -- [$topic]');
     try {
-      var result = await _publisherClient.listTopicSubscriptions(
-        ListTopicSubscriptionsRequest(
-          pageSize: pageSize,
-          pageToken: pageToken,
-          topic: topic.startsWith('projects/')
-              ? topic
-              : 'projects/$_projectId/topics/$topic',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient.listTopicSubscriptions(
+            ListTopicSubscriptionsRequest(
+              pageSize: pageSize,
+              pageToken: pageToken,
+              topic: topic.startsWith('projects/')
+                  ? topic
+                  : 'projects/$_projectId/topics/$topic',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[listTopicSubscriptions]: complete -- [$topic]');
     }
@@ -589,23 +672,29 @@ class PubsubClient {
     int? pageSize,
     String? pageToken,
     String? project,
+    int retries = 5,
   }) async {
     assert(_initialized);
     var projectId = project ?? _projectId;
     _logger.fine('[listTopics]: start -- [$projectId]');
 
     try {
-      var result = await _publisherClient.listTopics(
-        ListTopicsRequest(
-          pageSize: pageSize,
-          pageToken: pageToken,
-          project: projectId.startsWith('projects/')
-              ? projectId
-              : 'projects/$projectId',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient.listTopics(
+            ListTopicsRequest(
+              pageSize: pageSize,
+              pageToken: pageToken,
+              project: projectId.startsWith('projects/')
+                  ? projectId
+                  : 'projects/$projectId',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[listTopics]: complete -- [$projectId]');
     }
@@ -623,20 +712,26 @@ class PubsubClient {
   Future<void> modifyAckDeadline({
     required int ackDeadlineSeconds,
     required Iterable<String> ackIds,
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[modifyAckDeadline]: start -- [$subscription]');
 
     try {
-      await _subscriberClient.modifyAckDeadline(
-        ModifyAckDeadlineRequest(
-          ackDeadlineSeconds: ackDeadlineSeconds,
-          ackIds: ackIds,
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
+      return await _execute(
+        executor: () async {
+          await _subscriberClient.modifyAckDeadline(
+            ModifyAckDeadlineRequest(
+              ackDeadlineSeconds: ackDeadlineSeconds,
+              ackIds: ackIds,
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
+        },
+        retries: retries,
       );
     } finally {
       _logger.fine('[modifyAckDeadline]: complete -- [$subscription]');
@@ -655,19 +750,25 @@ class PubsubClient {
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<void> modifyPushConfig({
     required PushConfig pushConfig,
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[modifyPushConfig]: start -- [$subscription]');
 
     try {
-      await _subscriberClient.modifyPushConfig(
-        ModifyPushConfigRequest(
-          pushConfig: pushConfig,
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
+      return await _execute(
+        executor: () async {
+          await _subscriberClient.modifyPushConfig(
+            ModifyPushConfigRequest(
+              pushConfig: pushConfig,
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
+        },
+        retries: retries,
       );
     } finally {
       _logger.fine('[modifyPushConfig]: complete -- [$subscription]');
@@ -681,21 +782,28 @@ class PubsubClient {
   /// name in the format: `projects/{project}/topics/{topic}`.
   Future<PublishResponse> publish({
     required Iterable<PubsubMessage> messages,
+    int retries = 5,
     required String topic,
   }) async {
     assert(_initialized);
     _logger.fine('[publish]: start -- [$topic]');
     try {
-      var result = await _publisherClient.publish(
-        PublishRequest(
-          messages: messages,
-          topic: topic.startsWith('projects/')
-              ? topic
-              : 'projects/$_projectId/topics/$topic',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient.publish(
+            PublishRequest(
+              messages: messages,
+              topic: topic.startsWith('projects/')
+                  ? topic
+                  : 'projects/$_projectId/topics/$topic',
+            ),
+          );
+          _logger.finest('[publish]: result -- [${result.messageIds}]');
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[publish]: complete -- [$topic]');
     }
@@ -710,21 +818,27 @@ class PubsubClient {
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<List<ReceivedMessage>> pull({
     required int maxMessages,
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[pull]: start -- [$subscription]');
     try {
-      var result = await _subscriberClient.pull(
-        PullRequest(
-          maxMessages: maxMessages,
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.pull(
+            PullRequest(
+              maxMessages: maxMessages,
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
 
-      return result.receivedMessages;
+          return result.receivedMessages;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[pull]: complete -- [$subscription]');
     }
@@ -742,20 +856,26 @@ class PubsubClient {
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<SeekResponse> seek({
     required int maxMessages,
+    int retries = 5,
     required String subscription,
   }) async {
     assert(_initialized);
     _logger.fine('[seek]: start -- [$subscription]');
     try {
-      var result = await _subscriberClient.seek(
-        SeekRequest(
-          subscription: subscription.startsWith('projects/')
-              ? subscription
-              : 'projects/$_projectId/subscriptions/$subscription',
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.seek(
+            SeekRequest(
+              subscription: subscription.startsWith('projects/')
+                  ? subscription
+                  : 'projects/$_projectId/subscriptions/$subscription',
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[seek]: complete -- [$subscription]');
     }
@@ -771,15 +891,75 @@ class PubsubClient {
   ///
   /// For more information on the request, see:
   /// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#google.pubsub.v1.StreamingPullRequest
-  Future<ResponseStream<StreamingPullResponse>> streamingPull({
+  Future<Stream<StreamingPullResponse>> streamingPull({
+    void Function()? onClosed,
+    int retries = 5,
     required Stream<StreamingPullRequest> stream,
+    required StreamingPullRequest subscribeRequest,
   }) async {
     assert(_initialized);
     _logger.fine('[streamingPull]: start');
     try {
-      var result = await _subscriberClient.streamingPull(stream);
+      var innerController = StreamController<StreamingPullRequest>();
+      var outerController = StreamController<StreamingPullResponse>();
+      var listener = stream.listen((event) => innerController.add(event));
 
-      return result;
+      ResponseStream<StreamingPullResponse>? result;
+      StreamSubscription<StreamingPullResponse>? resultListener;
+
+      outerController.onCancel = () {
+        resultListener?.cancel();
+        result?.cancel();
+        innerController.close();
+        outerController.close();
+        listener.cancel();
+
+        if (onClosed != null) {
+          onClosed();
+        }
+      };
+
+      await _execute(
+        executor: () async {
+          result =
+              await _subscriberClient.streamingPull(innerController.stream);
+          resultListener =
+              result!.listen((event) => outerController.add(event));
+
+          _subscriptions.add(resultListener!);
+        },
+        retries: retries,
+      );
+
+      innerController.add(subscribeRequest);
+      late Future<void> Function() onCancel;
+      onCancel = () async {
+        if (!innerController.isClosed) {
+          _logger.finer('[streamingPull]: connection closed; retrying');
+
+          await _execute(
+            executor: () async {
+              await innerController.close();
+              innerController = StreamController<StreamingPullRequest>();
+              innerController.onCancel = onCancel;
+
+              var reset =
+                  await _subscriberClient.streamingPull(innerController.stream);
+              result = reset;
+              resultListener = reset.listen((event) {
+                outerController.add(event);
+              });
+              _subscriptions.add(resultListener!);
+              innerController.add(subscribeRequest);
+            },
+            retries: retries,
+          );
+        }
+      };
+
+      innerController.onCancel = onCancel;
+
+      return outerController.stream;
     } finally {
       _logger.fine('[streamingPull]: complete');
     }
@@ -793,6 +973,7 @@ class PubsubClient {
   /// The [snapshot] name can be just the simple name or it can be the fully
   /// quantified name in the format: `projects/{project}/snapshots/{snap}`.
   Future<Snapshot> updateSnapshot({
+    int retries = 5,
     required Snapshot snapshot,
     required List<SnapshotField> updateMask,
   }) async {
@@ -801,16 +982,21 @@ class PubsubClient {
 
     _logger.fine('[updateSnapshot]: start');
     try {
-      var result = await _subscriberClient.updateSnapshot(
-        UpdateSnapshotRequest(
-          snapshot: snapshot,
-          updateMask: pb.FieldMask(
-            paths: SnapshotField.toStrings(updateMask),
-          ),
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.updateSnapshot(
+            UpdateSnapshotRequest(
+              snapshot: snapshot,
+              updateMask: pb.FieldMask(
+                paths: SnapshotField.toStrings(updateMask),
+              ),
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[updateSnapshot]: complete');
     }
@@ -823,6 +1009,7 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<Subscription> updateSubscription({
+    int retries = 5,
     required Subscription subscription,
     required Iterable<SubscriptionField> updateMask,
   }) async {
@@ -831,16 +1018,21 @@ class PubsubClient {
 
     _logger.fine('[updateSubscription]: start');
     try {
-      var result = await _subscriberClient.updateSubscription(
-        UpdateSubscriptionRequest(
-          subscription: subscription,
-          updateMask: pb.FieldMask(
-            paths: SubscriptionField.toStrings(updateMask),
-          ),
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _subscriberClient.updateSubscription(
+            UpdateSubscriptionRequest(
+              subscription: subscription,
+              updateMask: pb.FieldMask(
+                paths: SubscriptionField.toStrings(updateMask),
+              ),
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[updateSubscription]: complete');
     }
@@ -851,6 +1043,7 @@ class PubsubClient {
   ///
   /// Set the list of fields to update via the [updateMask].
   Future<Topic> updateTopic({
+    int retries = 5,
     required Topic topic,
     required Iterable<TopicField> updateMask,
   }) async {
@@ -859,16 +1052,84 @@ class PubsubClient {
 
     _logger.fine('[updateTopic]: start -- [$topic]');
     try {
-      var result = await _publisherClient.updateTopic(
-        UpdateTopicRequest(
-          topic: topic,
-          updateMask: pb.FieldMask(paths: TopicField.toStrings(updateMask)),
-        ),
-      );
+      return await _execute(
+        executor: () async {
+          var result = await _publisherClient.updateTopic(
+            UpdateTopicRequest(
+              topic: topic,
+              updateMask: pb.FieldMask(paths: TopicField.toStrings(updateMask)),
+            ),
+          );
 
-      return result;
+          return result;
+        },
+        retries: retries,
+      );
     } finally {
       _logger.fine('[updateTopic]: complete -- [$topic]');
     }
+  }
+
+  Future<T> _execute<T>({
+    required Future<T> Function() executor,
+    required int retries,
+  }) async {
+    T result;
+
+    var delay = Duration(milliseconds: 500);
+    var attempts = 1;
+    while (true) {
+      try {
+        result = await executor();
+        break;
+      } catch (e) {
+        await _reconnect();
+        attempts++;
+        if (attempts < retries) {
+          await Future.delayed(delay);
+
+          delay = Duration(milliseconds: delay.inMilliseconds * 2);
+          rethrow;
+        } else {
+          _logger.fine(
+            '[execute]: Error attempting to execute function, attempt [$attempts / $retries].',
+          );
+        }
+      }
+    }
+
+    return result;
+  }
+
+  Future<void> _reconnect({
+    bool closePrevious = true,
+  }) async {
+    if (closePrevious) {
+      await _channel.shutdown();
+    }
+
+    _subscriptions.forEach((sub) => sub.cancel());
+    _subscriptions.clear();
+
+    var authenticator = ServiceAccountAuthenticator(
+      _serviceAccountJson,
+      _scopes,
+    );
+    _projectId = authenticator.projectId!;
+
+    _channel = GrpcOrGrpcWebClientChannel.grpc(
+      _host,
+      port: _port,
+    );
+
+    _publisherClient = PublisherClient(
+      _channel,
+      options: authenticator.toCallOptions,
+    );
+
+    _subscriberClient = SubscriberClient(
+      _channel,
+      options: authenticator.toCallOptions,
+    );
   }
 }
