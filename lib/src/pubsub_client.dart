@@ -7,6 +7,7 @@ import 'package:grpc_googleapis/google/pubsub_v1.dart';
 import 'package:grpc_protobuf_convert/grpc_protobuf_convert.dart';
 import 'package:grpc_pubsub/grpc_pubsub.dart';
 import 'package:logging/logging.dart';
+import 'package:protobuf/protobuf.dart' as pb1;
 
 class PubsubClient {
   PubsubClient({
@@ -94,14 +95,14 @@ class PubsubClient {
     _logger.fine('[acknowledge]: start -- [$subscription]');
 
     await _execute(
-      executor: () async {
-        await _subscriberClient.acknowledge(AcknowledgeRequest(
+      executor: () async => await _subscriberClient.acknowledge(
+        AcknowledgeRequest(
           ackIds: ackIds,
           subscription: subscription.startsWith('projects/')
               ? subscription
               : 'projects/$_projectId/subscriptions/$subscription',
-        ));
-      },
+        ),
+      ),
       retries: retries,
     );
     _logger.fine('[acknowledge]: complete -- [$subscription]');
@@ -311,16 +312,14 @@ class PubsubClient {
     _logger.fine('[deleteSnapshot]: start -- [$snapshot]');
 
     try {
-      return await _execute(
-        executor: () async {
-          await _subscriberClient.deleteSnapshot(
-            DeleteSnapshotRequest(
-              snapshot: snapshot.startsWith('projects/')
-                  ? snapshot
-                  : 'projects/$_projectId/snapshots/$snapshot',
-            ),
-          );
-        },
+      await _execute(
+        executor: () async => await _subscriberClient.deleteSnapshot(
+          DeleteSnapshotRequest(
+            snapshot: snapshot.startsWith('projects/')
+                ? snapshot
+                : 'projects/$_projectId/snapshots/$snapshot',
+          ),
+        ),
         retries: retries,
       );
     } finally {
@@ -345,16 +344,14 @@ class PubsubClient {
     _logger.fine('[deleteSubscription]: start -- [$subscription]');
 
     try {
-      return await _execute(
-        executor: () async {
-          await _subscriberClient.deleteSubscription(
-            DeleteSubscriptionRequest(
-              subscription: subscription.startsWith('projects/')
-                  ? subscription
-                  : 'projects/$_projectId/subscriptions/$subscription',
-            ),
-          );
-        },
+      await _execute(
+        executor: () async => await _subscriberClient.deleteSubscription(
+          DeleteSubscriptionRequest(
+            subscription: subscription.startsWith('projects/')
+                ? subscription
+                : 'projects/$_projectId/subscriptions/$subscription',
+          ),
+        ),
         retries: retries,
       );
     } finally {
@@ -378,9 +375,9 @@ class PubsubClient {
     _logger.fine('[deleteTopic]: start -- [$topic]');
     try {
       await _execute(
-        executor: () async {
-          await _publisherClient.deleteTopic(DeleteTopicRequest(topic: topic));
-        },
+        executor: () => _publisherClient.deleteTopic(
+          DeleteTopicRequest(topic: topic),
+        ),
         retries: retries,
       );
     } finally {
@@ -719,9 +716,9 @@ class PubsubClient {
     _logger.fine('[modifyAckDeadline]: start -- [$subscription]');
 
     try {
-      return await _execute(
+      await _execute<pb.Empty>(
         executor: () async {
-          await _subscriberClient.modifyAckDeadline(
+          return await _subscriberClient.modifyAckDeadline(
             ModifyAckDeadlineRequest(
               ackDeadlineSeconds: ackDeadlineSeconds,
               ackIds: ackIds,
@@ -748,7 +745,7 @@ class PubsubClient {
   /// The [subscription] name can be just the simple name or it can be the fully
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
-  Future<void> modifyPushConfig({
+  Future<pb.Empty> modifyPushConfig({
     required PushConfig pushConfig,
     int retries = 5,
     required String subscription,
@@ -757,9 +754,9 @@ class PubsubClient {
     _logger.fine('[modifyPushConfig]: start -- [$subscription]');
 
     try {
-      return await _execute(
+      return await _execute<pb.Empty>(
         executor: () async {
-          await _subscriberClient.modifyPushConfig(
+          return await _subscriberClient.modifyPushConfig(
             ModifyPushConfigRequest(
               pushConfig: pushConfig,
               subscription: subscription.startsWith('projects/')
@@ -824,7 +821,7 @@ class PubsubClient {
     assert(_initialized);
     _logger.fine('[pull]: start -- [$subscription]');
     try {
-      return await _execute(
+      return (await _execute(
         executor: () async {
           var result = await _subscriberClient.pull(
             PullRequest(
@@ -835,10 +832,11 @@ class PubsubClient {
             ),
           );
 
-          return result.receivedMessages;
+          return result;
         },
         retries: retries,
-      );
+      ))
+          .receivedMessages;
     } finally {
       _logger.fine('[pull]: complete -- [$subscription]');
     }
@@ -889,9 +887,17 @@ class PubsubClient {
   /// client should re-establish the stream.  Flow control can be achieved by
   /// configuring the underlying RPC channel.
   ///
+  /// The [connectionTtl] is the maximum amount of time to allow a single
+  /// connection to remain open.  As connections may close without any notice,
+  /// this value ensures that the stream can be re-established before messages
+  /// may have expired and ensure they are consistently received.  While it is
+  /// not recommended to disable the periodic reconnect, you may do so by
+  /// setting the value to [Duration.zero].
+  ///
   /// For more information on the request, see:
   /// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#google.pubsub.v1.StreamingPullRequest
   Future<Stream<StreamingPullResponse>> streamingPull({
+    Duration connectionTtl = const Duration(minutes: 5),
     void Function()? onClosed,
     int retries = 5,
     required Stream<StreamingPullRequest> stream,
@@ -899,47 +905,40 @@ class PubsubClient {
   }) async {
     assert(_initialized);
     _logger.fine('[streamingPull]: start');
-    try {
-      var innerController = StreamController<StreamingPullRequest>();
-      var outerController = StreamController<StreamingPullResponse>();
-      var listener = stream.listen((event) => innerController.add(event));
 
-      ResponseStream<StreamingPullResponse>? result;
-      StreamSubscription<StreamingPullResponse>? resultListener;
+    return runZonedGuarded(() async {
+      try {
+        var innerController = StreamController<StreamingPullRequest>();
+        var outerController = StreamController<StreamingPullResponse>();
+        var listener = stream.listen((event) => innerController.add(event));
 
-      outerController.onCancel = () {
-        resultListener?.cancel();
-        result?.cancel();
-        innerController.close();
-        outerController.close();
-        listener.cancel();
+        ResponseStream<StreamingPullResponse>? result;
+        StreamSubscription<StreamingPullResponse>? resultListener;
 
-        if (onClosed != null) {
-          onClosed();
-        }
-      };
+        late Future<void> Function() onCancel;
+        Timer? reconnectTimer;
 
-      await _execute(
-        executor: () async {
-          result =
-              await _subscriberClient.streamingPull(innerController.stream);
-          resultListener =
-              result!.listen((event) => outerController.add(event));
+        outerController.onCancel = () {
+          reconnectTimer?.cancel();
+          resultListener?.cancel();
+          result?.cancel();
+          innerController.close();
+          outerController.close();
+          listener.cancel();
 
-          _subscriptions.add(resultListener!);
-        },
-        retries: retries,
-      );
+          if (onClosed != null) {
+            onClosed();
+          }
+        };
 
-      innerController.add(subscribeRequest);
-      late Future<void> Function() onCancel;
-      onCancel = () async {
-        if (!innerController.isClosed) {
-          _logger.finer('[streamingPull]: connection closed; retrying');
-
-          await _execute(
+        var connect = () async {
+          await _executeStream<ResponseStream<StreamingPullResponse>>(
             executor: () async {
-              await innerController.close();
+              innerController.onCancel = null;
+
+              // ignore: unawaited_futures
+              innerController.close();
+
               innerController = StreamController<StreamingPullRequest>();
               innerController.onCancel = onCancel;
 
@@ -951,18 +950,57 @@ class PubsubClient {
               });
               _subscriptions.add(resultListener!);
               innerController.add(subscribeRequest);
+
+              return reset;
             },
             retries: retries,
           );
+        };
+
+        innerController.add(subscribeRequest);
+        onCancel = () async {
+          if (!innerController.isClosed) {
+            _logger.finer('[streamingPull]: connection closed; retrying');
+
+            try {
+              await connect();
+              _logger.finer('[streamingPull]: reconnected');
+            } catch (e, stack) {
+              _logger.severe(
+                '[streamingPull]: Error trying to connect',
+                e,
+                stack,
+              );
+            }
+          }
+        };
+
+        await connect();
+
+        if (connectionTtl.inMilliseconds > 0) {
+          reconnectTimer = Timer.periodic(connectionTtl, (timer) async {
+            _logger.finer('[streamingPull]: TTL exceeded, reconnecting');
+
+            try {
+              await connect();
+              _logger.finer('[streamingPull]: reconnected');
+            } catch (e, stack) {
+              _logger.severe(
+                '[streamingPull]: Error trying to connect',
+                e,
+                stack,
+              );
+            }
+          });
         }
-      };
 
-      innerController.onCancel = onCancel;
-
-      return outerController.stream;
-    } finally {
-      _logger.fine('[streamingPull]: complete');
-    }
+        return outerController.stream;
+      } finally {
+        _logger.fine('[streamingPull]: complete');
+      }
+    }, (e, stack) {
+      _logger.severe('[streamingPull]: uncaught error encountered', e, stack);
+    })!;
   }
 
   /// Updates an existing snapshot.  Snapshots are used in `Seek` operations,
@@ -1070,17 +1108,28 @@ class PubsubClient {
     }
   }
 
-  Future<T> _execute<T>({
+  Future<T> _execute<T extends pb1.GeneratedMessage>({
     required Future<T> Function() executor,
     required int retries,
   }) async {
-    T result;
+    T? result;
 
     var delay = Duration(milliseconds: 500);
     var attempts = 1;
-    while (true) {
+    while (result == null) {
+      var completer = Completer<T>();
+      Completer<T>? innerCompleter = completer;
       try {
-        result = await executor();
+        // ignore: unawaited_futures
+        runZonedGuarded(() async {
+          innerCompleter?.complete(await executor());
+          innerCompleter = null;
+        }, (e, stack) {
+          innerCompleter?.completeError(e, stack);
+          innerCompleter = null;
+        });
+
+        result = await completer.future;
         break;
       } catch (e) {
         await _reconnect();
@@ -1089,11 +1138,53 @@ class PubsubClient {
           await Future.delayed(delay);
 
           delay = Duration(milliseconds: delay.inMilliseconds * 2);
-          rethrow;
-        } else {
           _logger.fine(
             '[execute]: Error attempting to execute function, attempt [$attempts / $retries].',
           );
+        } else {
+          rethrow;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  Future<T> _executeStream<T extends ResponseStream>({
+    required Future<T> Function() executor,
+    required int retries,
+  }) async {
+    T? result;
+
+    var delay = Duration(milliseconds: 500);
+    var attempts = 1;
+    while (result == null) {
+      var completer = Completer<T>();
+      Completer<T>? innerCompleter = completer;
+      try {
+        // ignore: unawaited_futures
+        runZonedGuarded(() async {
+          innerCompleter?.complete(await executor());
+          innerCompleter = null;
+        }, (e, stack) {
+          innerCompleter?.completeError(e, stack);
+          innerCompleter = null;
+        });
+
+        result = await completer.future;
+        break;
+      } catch (e) {
+        await _reconnect();
+        attempts++;
+        if (attempts < retries) {
+          await Future.delayed(delay);
+
+          delay = Duration(milliseconds: delay.inMilliseconds * 2);
+          _logger.fine(
+            '[execute]: Error attempting to execute function, attempt [$attempts / $retries].',
+          );
+        } else {
+          rethrow;
         }
       }
     }
