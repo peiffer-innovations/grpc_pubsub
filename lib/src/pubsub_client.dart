@@ -783,7 +783,13 @@ class PubsubClient {
     required String topic,
   }) async {
     assert(_initialized);
-    _logger.fine('[publish]: start -- [$topic]');
+    try {
+      _logger.fine('[publish]: start -- [$topic]');
+    } catch (e) {
+      // no-op; in the event that log events are sent via PubSub, this can
+      // trigger errors trying to log this information out.  So... ignore that
+      // error as log errors should never be allowed to create issues.
+    }
     try {
       return await _execute(
         executor: () async {
@@ -802,7 +808,13 @@ class PubsubClient {
         retries: retries,
       );
     } finally {
-      _logger.fine('[publish]: complete -- [$topic]');
+      try {
+        _logger.fine('[publish]: complete -- [$topic]');
+      } catch (e) {
+        // no-op; in the event that log events are sent via PubSub, this can
+        // trigger errors trying to log this information out.  So... ignore that
+        // error as log errors should never be allowed to create issues.
+      }
     }
   }
 
