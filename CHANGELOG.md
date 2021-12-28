@@ -1,3 +1,8 @@
+## [1.0.3] - December 28th, 2021
+
+* Dependency Updates
+
+
 ## [1.0.2] - December 23rd, 2021
 
 * Ignore log errors on publish in case log events are the things being published
