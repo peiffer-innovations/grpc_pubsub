@@ -1,25 +1,23 @@
-name: grpc_pubsub
-description: Wrapper client around the gRPC based APIs for Google Pub/Sub that supports streaming and retries.
-version: 1.0.3+2
-homepage: https://github.com/peiffer-innovations/grpc_pubsub
+name: 'grpc_pubsub'
+description: 'Wrapper client around the gRPC based APIs for Google Pub/Sub that supports streaming and retries.'
+version: '1.0.3+3'
+homepage: 'https://github.com/peiffer-innovations/grpc_pubsub'
 
-environment:
+environment: 
   sdk: '>=2.17.0 <3.0.0'
 
-dependencies:
-  grpc: ^3.0.2
-  grpc_googleapis: ^2.0.19
-  grpc_protobuf_convert: ^2.0.0+2
-  logging: ^1.0.1
-  meta: ^1.7.0
-  protobuf: ^2.0.1
+dependencies: 
+  grpc: '^3.0.2'
+  grpc_googleapis: '^2.0.20'
+  grpc_protobuf_convert: '^2.0.0+2'
+  logging: '^1.0.2'
+  meta: '^1.7.0'
+  protobuf: '^2.0.1'
 
-dev_dependencies:
-  test: ^1.21.1
+dev_dependencies: 
+  test: '^1.21.1'
 
-ignore_updates:
-  # Ignoring everything in flutter_test as those are all point-in-time entries
-  # can't upgrade without upgrading Flutter itself.
+ignore_updates: 
   - 'async'
   - 'boolean_selector'
   - 'characters'
