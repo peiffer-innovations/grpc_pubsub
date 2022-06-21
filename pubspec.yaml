@@ -1,6 +1,6 @@
 name: 'grpc_pubsub'
 description: 'Wrapper client around the gRPC based APIs for Google Pub/Sub that supports streaming and retries.'
-version: '1.0.3+4'
+version: '1.0.3+5'
 homepage: 'https://github.com/peiffer-innovations/grpc_pubsub'
 
 environment: 
@@ -12,10 +12,10 @@ dependencies:
   grpc_protobuf_convert: '^2.0.0+3'
   logging: '^1.0.2'
   meta: '^1.7.0'
-  protobuf: '^2.0.1'
+  protobuf: '^2.1.0'
 
 dev_dependencies: 
-  test: '^1.21.1'
+  test: '^1.21.2'
 
 ignore_updates: 
   - 'async'
