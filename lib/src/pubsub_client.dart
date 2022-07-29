@@ -16,6 +16,7 @@ class PubsubClient {
     int port = 443,
     List<String> scopes = const [
       'https://www.googleapis.com/auth/cloud-platform',
+      'https://www.googleapis.com/auth/datastore',
       SCOPE,
     ],
     required String serviceAccountJson,
