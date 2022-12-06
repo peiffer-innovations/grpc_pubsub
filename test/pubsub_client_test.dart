@@ -5,7 +5,7 @@ import 'package:logging/logging.dart';
 import 'package:test/test.dart';
 
 Future<void> main() async {
-  var file = File('secrets/service_account.json');
+  final file = File('secrets/service_account.json');
 
   String? serviceAccount;
   if (file.existsSync()) {
@@ -31,11 +31,11 @@ Future<void> main() async {
     });
     Logger.root.level = Level.FINEST;
 
-    var client = PubsubClient(serviceAccountJson: serviceAccount);
+    final client = PubsubClient(serviceAccountJson: serviceAccount);
     await client.initialize();
 
     setUp(() async {
-      var topics = (await client.listTopics()).topics;
+      final topics = (await client.listTopics()).topics;
       for (var i = 0; i < topics.length; i++) {
         await client.deleteTopic(topic: topics[i].name);
       }
@@ -79,7 +79,7 @@ Future<void> main() async {
     });
 
     test('publish', () async {
-      var topic = await client.createTopic(topic: 'unit-test-publish');
+      final topic = await client.createTopic(topic: 'unit-test-publish');
 
       expect(
         topic.name,
@@ -96,7 +96,7 @@ Future<void> main() async {
     });
 
     tearDown(() async {
-      var topics = (await client.listTopics()).topics;
+      final topics = (await client.listTopics()).topics;
       for (var i = 0; i < topics.length; i++) {
         await client.deleteTopic(topic: topics[i].name);
       }

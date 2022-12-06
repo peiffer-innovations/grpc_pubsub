@@ -141,7 +141,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.createSnapshot(
+          final result = await _subscriberClient.createSnapshot(
             CreateSnapshotRequest(
               labels: labels,
               name: snapshot.startsWith('projects/')
@@ -207,7 +207,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.createSubscription(
+          final result = await _subscriberClient.createSubscription(
             Subscription(
               ackDeadlineSeconds: ackDeadlineSeconds,
               deadLetterPolicy: deadLetterPolicy,
@@ -268,7 +268,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var request = Topic(
+          final request = Topic(
             name: topic.startsWith('projects/')
                 ? topic
                 : 'projects/$_projectId/topics/$topic',
@@ -283,7 +283,7 @@ class PubsubClient {
                   ),
           );
 
-          var result = await _publisherClient.createTopic(request);
+          final result = await _publisherClient.createTopic(request);
 
           return result;
         },
@@ -402,7 +402,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient
+          final result = await _publisherClient
               .detachSubscription(DetachSubscriptionRequest(
             subscription: subscription.startsWith('projects/')
                 ? subscription
@@ -435,7 +435,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.getSnapshot(
+          final result = await _subscriberClient.getSnapshot(
             GetSnapshotRequest(
               snapshot: snapshot.startsWith('projects/')
                   ? snapshot
@@ -467,7 +467,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.getSubscription(
+          final result = await _subscriberClient.getSubscription(
             GetSubscriptionRequest(
               subscription: subscription.startsWith('projects/')
                   ? subscription
@@ -496,7 +496,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient.getTopic(
+          final result = await _publisherClient.getTopic(
             GetTopicRequest(
               topic: topic.startsWith('projects/')
                   ? topic
@@ -529,13 +529,13 @@ class PubsubClient {
     int retries = 5,
   }) async {
     assert(_initialized);
-    var projectId = project ?? _projectId;
+    final projectId = project ?? _projectId;
     _logger.fine('[listSnapshots]: start -- [$projectId]');
 
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.listSnapshots(
+          final result = await _subscriberClient.listSnapshots(
             ListSnapshotsRequest(
               pageSize: pageSize,
               pageToken: pageToken,
@@ -566,13 +566,13 @@ class PubsubClient {
     int retries = 5,
   }) async {
     assert(_initialized);
-    var projectId = project ?? _projectId;
+    final projectId = project ?? _projectId;
     _logger.fine('[listSubscriptions]: start -- [$projectId]');
 
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.listSubscriptions(
+          final result = await _subscriberClient.listSubscriptions(
             ListSubscriptionsRequest(
               pageSize: pageSize,
               pageToken: pageToken,
@@ -609,7 +609,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient.listTopicSnapshots(
+          final result = await _publisherClient.listTopicSnapshots(
             ListTopicSnapshotsRequest(
               pageSize: pageSize,
               pageToken: pageToken,
@@ -643,7 +643,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient.listTopicSubscriptions(
+          final result = await _publisherClient.listTopicSubscriptions(
             ListTopicSubscriptionsRequest(
               pageSize: pageSize,
               pageToken: pageToken,
@@ -673,13 +673,13 @@ class PubsubClient {
     int retries = 5,
   }) async {
     assert(_initialized);
-    var projectId = project ?? _projectId;
+    final projectId = project ?? _projectId;
     _logger.fine('[listTopics]: start -- [$projectId]');
 
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient.listTopics(
+          final result = await _publisherClient.listTopics(
             ListTopicsRequest(
               pageSize: pageSize,
               pageToken: pageToken,
@@ -794,7 +794,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient.publish(
+          final result = await _publisherClient.publish(
             PublishRequest(
               messages: messages,
               topic: topic.startsWith('projects/')
@@ -836,7 +836,7 @@ class PubsubClient {
     try {
       return (await _execute(
         executor: () async {
-          var result = await _subscriberClient.pull(
+          final result = await _subscriberClient.pull(
             PullRequest(
               maxMessages: maxMessages,
               subscription: subscription.startsWith('projects/')
@@ -875,7 +875,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.seek(
+          final result = await _subscriberClient.seek(
             SeekRequest(
               subscription: subscription.startsWith('projects/')
                   ? subscription
@@ -922,8 +922,8 @@ class PubsubClient {
     return runZonedGuarded(() async {
       try {
         var innerController = StreamController<StreamingPullRequest>();
-        var outerController = StreamController<StreamingPullResponse>();
-        var listener = stream.listen((event) => innerController.add(event));
+        final outerController = StreamController<StreamingPullResponse>();
+        final listener = stream.listen((event) => innerController.add(event));
 
         ResponseStream<StreamingPullResponse>? result;
         StreamSubscription<StreamingPullResponse>? resultListener;
@@ -944,7 +944,7 @@ class PubsubClient {
           }
         };
 
-        var connect = () async {
+        final connect = () async {
           await _executeStream<ResponseStream<StreamingPullResponse>>(
             executor: () async {
               innerController.onCancel = null;
@@ -955,7 +955,7 @@ class PubsubClient {
               innerController = StreamController<StreamingPullRequest>();
               innerController.onCancel = onCancel;
 
-              var reset =
+              final reset =
                   await _subscriberClient.streamingPull(innerController.stream);
               result = reset;
               resultListener = reset.listen((event) {
@@ -1035,7 +1035,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.updateSnapshot(
+          final result = await _subscriberClient.updateSnapshot(
             UpdateSnapshotRequest(
               snapshot: snapshot,
               updateMask: pb.FieldMask(
@@ -1071,7 +1071,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _subscriberClient.updateSubscription(
+          final result = await _subscriberClient.updateSubscription(
             UpdateSubscriptionRequest(
               subscription: subscription,
               updateMask: pb.FieldMask(
@@ -1105,7 +1105,7 @@ class PubsubClient {
     try {
       return await _execute(
         executor: () async {
-          var result = await _publisherClient.updateTopic(
+          final result = await _publisherClient.updateTopic(
             UpdateTopicRequest(
               topic: topic,
               updateMask: pb.FieldMask(paths: TopicField.toStrings(updateMask)),
@@ -1127,10 +1127,10 @@ class PubsubClient {
   }) async {
     T? result;
 
-    var delay = Duration(milliseconds: 500);
+    var delay = const Duration(milliseconds: 500);
     var attempts = 1;
     while (result == null) {
-      var completer = Completer<T>();
+      final completer = Completer<T>();
       Completer<T>? innerCompleter = completer;
       try {
         // ignore: unawaited_futures
@@ -1169,10 +1169,10 @@ class PubsubClient {
   }) async {
     T? result;
 
-    var delay = Duration(milliseconds: 500);
+    var delay = const Duration(milliseconds: 500);
     var attempts = 1;
     while (result == null) {
-      var completer = Completer<T>();
+      final completer = Completer<T>();
       Completer<T>? innerCompleter = completer;
       try {
         // ignore: unawaited_futures
@@ -1215,7 +1215,7 @@ class PubsubClient {
     _subscriptions.forEach((sub) => sub.cancel());
     _subscriptions.clear();
 
-    var authenticator = ServiceAccountAuthenticator(
+    final authenticator = ServiceAccountAuthenticator(
       _serviceAccountJson,
       _scopes,
     );
