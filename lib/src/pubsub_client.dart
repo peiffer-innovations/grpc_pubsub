@@ -17,7 +17,7 @@ class PubsubClient {
     List<String> scopes = const [
       'https://www.googleapis.com/auth/cloud-platform',
       'https://www.googleapis.com/auth/datastore',
-      SCOPE,
+      kScope,
     ],
     required String serviceAccountJson,
   })  : _host = host,
@@ -26,7 +26,7 @@ class PubsubClient {
         _scopes = List.from(scopes),
         _serviceAccountJson = serviceAccountJson;
 
-  static const SCOPE = 'https://www.googleapis.com/auth/pubsub';
+  static const kScope = 'https://www.googleapis.com/auth/pubsub';
 
   final Logger _logger;
   final String _host;
@@ -68,7 +68,9 @@ class PubsubClient {
 
       await _channel.shutdown();
 
-      _subscriptions.forEach((sub) => sub.cancel());
+      for (var sub in _subscriptions) {
+        await sub.cancel();
+      }
       _subscriptions.clear();
 
       _initialized = false;
@@ -944,7 +946,7 @@ class PubsubClient {
           }
         };
 
-        final connect = () async {
+        Future<void> connect() async {
           await _executeStream<ResponseStream<StreamingPullResponse>>(
             executor: () async {
               innerController.onCancel = null;
@@ -956,7 +958,7 @@ class PubsubClient {
               innerController.onCancel = onCancel;
 
               final reset =
-                  await _subscriberClient.streamingPull(innerController.stream);
+                  _subscriberClient.streamingPull(innerController.stream);
               result = reset;
               resultListener = reset.listen((event) {
                 outerController.add(event);
@@ -968,7 +970,7 @@ class PubsubClient {
             },
             retries: retries,
           );
-        };
+        }
 
         innerController.add(subscribeRequest);
         onCancel = () async {
@@ -1212,7 +1214,9 @@ class PubsubClient {
       await _channel.shutdown();
     }
 
-    _subscriptions.forEach((sub) => sub.cancel());
+    for (var sub in _subscriptions) {
+      await sub.cancel();
+    }
     _subscriptions.clear();
 
     final authenticator = ServiceAccountAuthenticator(

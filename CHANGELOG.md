@@ -1,3 +1,8 @@
+## [1.0.6] - November 15th, 2023
+
+* Standardized analysis rules
+
+
 ## [1.0.5] - June 17th, 2023
 
 * Dart 3.0
