@@ -6,33 +6,70 @@ import 'package:grpc_googleapis/google/protobuf.dart' as pb;
 import 'package:grpc_googleapis/google/pubsub_v1.dart';
 import 'package:grpc_protobuf_convert/grpc_protobuf_convert.dart';
 import 'package:grpc_pubsub/grpc_pubsub.dart';
+import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:protobuf/protobuf.dart' as pb1;
 
 class PubsubClient {
-  PubsubClient({
+  factory PubsubClient({
     Logger? logger,
     String host = 'pubsub.googleapis.com',
     int port = 443,
-    List<String> scopes = const [
-      'https://www.googleapis.com/auth/cloud-platform',
-      'https://www.googleapis.com/auth/datastore',
-      kScope,
-    ],
+    List<String> scopes = kDefaultScopes,
     required String serviceAccountJson,
+  }) =>
+      PubsubClient._(
+        logger: logger,
+        host: host,
+        port: port,
+        scopes: scopes,
+        serviceAccountJson: serviceAccountJson,
+      );
+
+  factory PubsubClient.emulatorsOwner({
+    Logger? logger,
+    String host = 'localhost',
+    int port = 5097,
+    String projectId = 'local-emulator',
+    List<String> scopes = kDefaultScopes,
+  }) =>
+      PubsubClient._(
+        logger: logger,
+        host: host,
+        port: port,
+        projectId: projectId,
+        scopes: kDefaultScopes,
+      );
+
+  PubsubClient._({
+    Logger? logger,
+    String host = 'pubsub.googleapis.com',
+    int port = 443,
+    String? projectId,
+    List<String> scopes = kDefaultScopes,
+    String? serviceAccountJson,
   })  : _host = host,
         _logger = logger ?? Logger('PubSub'),
         _port = port,
         _scopes = List.from(scopes),
-        _serviceAccountJson = serviceAccountJson;
+        _serviceAccountJson = serviceAccountJson {
+    if (projectId != null) {
+      _projectId = projectId;
+    }
+  }
 
+  static const kDefaultScopes = [
+    'https://www.googleapis.com/auth/cloud-platform',
+    'https://www.googleapis.com/auth/datastore',
+    kScope,
+  ];
   static const kScope = 'https://www.googleapis.com/auth/pubsub';
 
   final Logger _logger;
   final String _host;
   final int _port;
   final List<String> _scopes;
-  final String _serviceAccountJson;
+  final String? _serviceAccountJson;
   final List<StreamSubscription> _subscriptions = [];
 
   late GrpcOrGrpcWebClientChannel _channel;
@@ -132,10 +169,11 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<Snapshot> createSnapshot({
-    required Map<String, String> labels,
+    Map<String, String>? labels,
     int retries = 5,
     required String snapshot,
     required String subscription,
+    Map<String, String>? tags,
   }) async {
     assert(_initialized);
     _logger.fine('[createSnapshot]: start -- [$subscription]');
@@ -145,13 +183,14 @@ class PubsubClient {
         executor: () async {
           final result = await _subscriberClient.createSnapshot(
             CreateSnapshotRequest(
-              labels: labels,
+              labels: labels?.entries,
               name: snapshot.startsWith('projects/')
                   ? snapshot
                   : 'projects/$_projectId/snapshots/$snapshot',
               subscription: subscription.startsWith('projects/')
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
+              tags: tags?.entries,
             ),
           );
 
@@ -189,17 +228,25 @@ class PubsubClient {
   /// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#google.pubsub.v1.Subscription
   Future<Subscription> createSubscription({
     int? ackDeadlineSeconds,
+    Subscription_AnalyticsHubSubscriptionInfo? analyticsHubSubscriptionInfo,
+    BigQueryConfig? bigqueryConfig,
+    CloudStorageConfig? cloudStorageConfig,
     DeadLetterPolicy? deadLetterPolicy,
+    bool? detached,
+    bool? enableExactlyOnceDelivery,
     bool? enableMessageOrdering,
     ExpirationPolicy? expirationPolicy,
     String? filter,
     Map<String, String>? labels,
     Duration? messageRetentionDuration,
+    Iterable<MessageTransform>? messageTransforms,
     PushConfig? pushConfig,
     bool? retainAckedMessages,
     int retries = 5,
     RetryPolicy? retryPolicy,
+    Subscription_State? state,
     String? subscription,
+    Map<String, String>? tags,
     required String topic,
     Duration? topicMessageRetentionDuration,
   }) async {
@@ -212,14 +259,20 @@ class PubsubClient {
           final result = await _subscriberClient.createSubscription(
             Subscription(
               ackDeadlineSeconds: ackDeadlineSeconds,
+              analyticsHubSubscriptionInfo: analyticsHubSubscriptionInfo,
+              bigqueryConfig: bigqueryConfig,
+              cloudStorageConfig: cloudStorageConfig,
               deadLetterPolicy: deadLetterPolicy,
+              detached: detached,
+              enableExactlyOnceDelivery: enableExactlyOnceDelivery,
               enableMessageOrdering: enableMessageOrdering,
               expirationPolicy: expirationPolicy,
               filter: filter,
-              labels: labels,
+              labels: labels?.entries,
               messageRetentionDuration: messageRetentionDuration == null
                   ? null
                   : GrpcProtobufConvert.toDuration(messageRetentionDuration),
+              messageTransforms: messageTransforms,
               name: subscription == null
                   ? null
                   : subscription.startsWith('projects/')
@@ -228,6 +281,8 @@ class PubsubClient {
               pushConfig: pushConfig,
               retainAckedMessages: retainAckedMessages,
               retryPolicy: retryPolicy,
+              state: state,
+              tags: tags?.entries,
               topic: topic.startsWith('projects/')
                   ? topic
                   : 'projects/$_projectId/topics/$topic',
@@ -257,12 +312,17 @@ class PubsubClient {
   /// topic.  The expected format is
   /// `projects/*/locations/*/keyRings/*/cryptoKeys/*`.
   Future<Topic> createTopic({
-    Map<String, String>? labels,
-    MessageStoragePolicy? messageStoragePolicy,
+    IngestionDataSourceSettings? ingestionDataSourceSettings,
     String? kmsKeyName,
-    int retries = 5,
-    SchemaSettings? schemaSettings,
+    Map<String, String>? labels,
     Duration? messageRetentionDuration,
+    MessageStoragePolicy? messageStoragePolicy,
+    Iterable<MessageTransform>? messageTransform,
+    int retries = 5,
+    bool? satisfiesPzs,
+    SchemaSettings? schemaSettings,
+    Topic_State? state,
+    Map<String, String>? tags,
     required String topic,
   }) async {
     assert(_initialized);
@@ -274,15 +334,20 @@ class PubsubClient {
             name: topic.startsWith('projects/')
                 ? topic
                 : 'projects/$_projectId/topics/$topic',
-            labels: labels,
-            messageStoragePolicy: messageStoragePolicy,
+            ingestionDataSourceSettings: ingestionDataSourceSettings,
             kmsKeyName: kmsKeyName,
-            schemaSettings: schemaSettings,
+            labels: labels?.entries,
             messageRetentionDuration: messageRetentionDuration == null
                 ? null
                 : GrpcProtobufConvert.toDuration(
                     messageRetentionDuration,
                   ),
+            messageStoragePolicy: messageStoragePolicy,
+            messageTransforms: messageTransform,
+            satisfiesPzs: satisfiesPzs,
+            schemaSettings: schemaSettings,
+            state: state,
+            tags: tags?.entries,
           );
 
           final result = await _publisherClient.createTopic(request);
@@ -841,6 +906,8 @@ class PubsubClient {
           final result = await _subscriberClient.pull(
             PullRequest(
               maxMessages: maxMessages,
+              // @deprecated
+              // returnImmediately: bool
               subscription: subscription.startsWith('projects/')
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
@@ -870,7 +937,9 @@ class PubsubClient {
   Future<SeekResponse> seek({
     required int maxMessages,
     int retries = 5,
+    String? snapshot,
     required String subscription,
+    DateTime? time,
   }) async {
     assert(_initialized);
     _logger.fine('[seek]: start -- [$subscription]');
@@ -879,9 +948,11 @@ class PubsubClient {
         executor: () async {
           final result = await _subscriberClient.seek(
             SeekRequest(
+              snapshot: snapshot,
               subscription: subscription.startsWith('projects/')
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
+              time: time == null ? null : GrpcProtobufConvert.toTimestamp(time),
             ),
           );
 
@@ -1219,25 +1290,69 @@ class PubsubClient {
     }
     _subscriptions.clear();
 
-    final authenticator = ServiceAccountAuthenticator(
-      _serviceAccountJson,
-      _scopes,
-    );
-    _projectId = authenticator.projectId!;
+    final serviceAccount = _serviceAccountJson;
+
+    final authenticator = serviceAccount == null
+        ? null
+        : ServiceAccountAuthenticator(
+            serviceAccount,
+            _scopes,
+          );
+    if (authenticator != null) {
+      _projectId = authenticator.projectId!;
+    }
 
     _channel = GrpcOrGrpcWebClientChannel.grpc(
       _host,
       port: _port,
     );
 
+    final callOptions = authenticator?.toCallOptions ??
+        CallOptions(metadata: {'authorization': 'Bearer owner'});
     _publisherClient = PublisherClient(
       _channel,
-      options: authenticator.toCallOptions,
+      options: callOptions,
     );
 
     _subscriberClient = SubscriberClient(
       _channel,
-      options: authenticator.toCallOptions,
+      options: callOptions,
     );
+  }
+}
+
+class OwnerClient extends http.BaseClient {
+  OwnerClient({
+    this.baseClient,
+  });
+
+  final http.Client? baseClient;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final client = baseClient ?? http.Client();
+    try {
+      final req = http.Request(
+        request.method,
+        request.url,
+      );
+
+      req.followRedirects = request.followRedirects;
+      req.persistentConnection = request.persistentConnection;
+      req.bodyBytes = await request.finalize().toBytes();
+
+      req.headers.addAll({
+        ...request.headers,
+        'Authorization': 'Bearer owner',
+      });
+
+      final response = client.send(req);
+
+      return response;
+    } finally {
+      if (client != baseClient) {
+        client.close();
+      }
+    }
   }
 }

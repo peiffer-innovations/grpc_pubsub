@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:grpc_pubsub/grpc_pubsub.dart';
@@ -101,5 +103,74 @@ Future<void> main() async {
         await client.deleteTopic(topic: topics[i].name);
       }
     });
+  }
+}
+
+// ignore_for_file: avoid_print
+
+class FirebaseEmulators {
+  FirebaseEmulators({
+    this.pubsubUrl = 'http://localhost:5097/',
+  });
+
+  final String projectId;
+  final String pubsubUrl;
+
+  Process? _process;
+
+  Future<GcloudClient> start({
+    bool launchEmulators = true,
+  }) async {
+    if (_process != null) {
+      throw Exception('Process already started');
+    }
+    if (launchEmulators) {
+      final completer = Completer();
+      print('Checking for firebase emulators');
+      final exit = Process.runSync('firebase', ['--version']).exitCode;
+      if (exit != 0) {
+        print('Installing firebase emulators');
+        Process.runSync('npm', ['install', '-g', 'firebase-tools']);
+      }
+
+      print('Starting emulators');
+      final process = await Process.start('firebase', [
+        'emulators:start',
+        '--project',
+        'project',
+      ]);
+      _process = process;
+      process.stdout.listen((event) {
+        final line = utf8.decode(event).trim();
+        print(line);
+        if (line.contains('All emulators ready!')) {
+          completer.complete();
+        }
+      });
+      process.stderr.listen((event) {
+        print(utf8.decode(event).trim());
+      });
+
+      await completer.future;
+      print('emulators started');
+    }
+
+    final client = GcloudClient.emulatorsOwner(
+      firebaseDatabaseConfig: firebaseDatabaseConfig,
+      firestoreConfig: firestoreConfig,
+      projectId: projectId,
+      pubsubConfig: pubsubConfig,
+      storageConfig: storageConfig,
+    );
+
+    return client;
+  }
+
+  Future<void> stop() async {
+    final process = _process;
+    if (process != null) {
+      process.kill();
+      await process.exitCode;
+    }
   }
 }
