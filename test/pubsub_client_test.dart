@@ -118,7 +118,7 @@ class FirebaseEmulators {
 
   Process? _process;
 
-  Future<GcloudClient> start({
+  Future<PubsubClient> start({
     bool launchEmulators = true,
   }) async {
     if (_process != null) {
@@ -137,7 +137,7 @@ class FirebaseEmulators {
       final process = await Process.start('firebase', [
         'emulators:start',
         '--project',
-        'project',
+        projectId,
       ]);
       _process = process;
       process.stdout.listen((event) {
@@ -155,12 +155,8 @@ class FirebaseEmulators {
       print('emulators started');
     }
 
-    final client = GcloudClient.emulatorsOwner(
-      firebaseDatabaseConfig: firebaseDatabaseConfig,
-      firestoreConfig: firestoreConfig,
+    final client = PubsubClient.emulatorsOwner(
       projectId: projectId,
-      pubsubConfig: pubsubConfig,
-      storageConfig: storageConfig,
     );
 
     return client;
