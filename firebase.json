@@ -1,0 +1,7 @@
+{
+  "emulators": {
+    "pubsub": {
+      "port": 5097
+    }
+  }
+}

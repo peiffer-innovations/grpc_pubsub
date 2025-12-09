@@ -6,33 +6,70 @@ import 'package:grpc_googleapis/google/protobuf.dart' as pb;
 import 'package:grpc_googleapis/google/pubsub_v1.dart';
 import 'package:grpc_protobuf_convert/grpc_protobuf_convert.dart';
 import 'package:grpc_pubsub/grpc_pubsub.dart';
+import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:protobuf/protobuf.dart' as pb1;
 
 class PubsubClient {
-  PubsubClient({
+  factory PubsubClient({
     Logger? logger,
     String host = 'pubsub.googleapis.com',
     int port = 443,
-    List<String> scopes = const [
-      'https://www.googleapis.com/auth/cloud-platform',
-      'https://www.googleapis.com/auth/datastore',
-      kScope,
-    ],
+    List<String> scopes = kDefaultScopes,
     required String serviceAccountJson,
+  }) =>
+      PubsubClient._(
+        logger: logger,
+        host: host,
+        port: port,
+        scopes: scopes,
+        serviceAccountJson: serviceAccountJson,
+      );
+
+  factory PubsubClient.emulatorsOwner({
+    Logger? logger,
+    String host = 'localhost',
+    int port = 5097,
+    String projectId = 'local-emulator',
+    List<String> scopes = kDefaultScopes,
+  }) =>
+      PubsubClient._(
+        logger: logger,
+        host: host,
+        port: port,
+        projectId: projectId,
+        scopes: kDefaultScopes,
+      );
+
+  PubsubClient._({
+    Logger? logger,
+    String host = 'pubsub.googleapis.com',
+    int port = 443,
+    String? projectId,
+    List<String> scopes = kDefaultScopes,
+    String? serviceAccountJson,
   })  : _host = host,
         _logger = logger ?? Logger('PubSub'),
         _port = port,
         _scopes = List.from(scopes),
-        _serviceAccountJson = serviceAccountJson;
+        _serviceAccountJson = serviceAccountJson {
+    if (projectId != null) {
+      _projectId = projectId;
+    }
+  }
 
+  static const kDefaultScopes = [
+    'https://www.googleapis.com/auth/cloud-platform',
+    'https://www.googleapis.com/auth/datastore',
+    kScope,
+  ];
   static const kScope = 'https://www.googleapis.com/auth/pubsub';
 
   final Logger _logger;
   final String _host;
   final int _port;
   final List<String> _scopes;
-  final String _serviceAccountJson;
+  final String? _serviceAccountJson;
   final List<StreamSubscription> _subscriptions = [];
 
   late GrpcOrGrpcWebClientChannel _channel;
@@ -132,10 +169,11 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<Snapshot> createSnapshot({
-    required Map<String, String> labels,
+    Map<String, String>? labels,
     int retries = 5,
     required String snapshot,
     required String subscription,
+    Map<String, String>? tags,
   }) async {
     assert(_initialized);
     _logger.fine('[createSnapshot]: start -- [$subscription]');
@@ -145,13 +183,14 @@ class PubsubClient {
         executor: () async {
           final result = await _subscriberClient.createSnapshot(
             CreateSnapshotRequest(
-              labels: labels,
+              labels: labels?.entries,
               name: snapshot.startsWith('projects/')
                   ? snapshot
                   : 'projects/$_projectId/snapshots/$snapshot',
               subscription: subscription.startsWith('projects/')
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
+              tags: tags?.entries,
             ),
           );
 
@@ -189,17 +228,25 @@ class PubsubClient {
   /// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#google.pubsub.v1.Subscription
   Future<Subscription> createSubscription({
     int? ackDeadlineSeconds,
+    Subscription_AnalyticsHubSubscriptionInfo? analyticsHubSubscriptionInfo,
+    BigQueryConfig? bigqueryConfig,
+    CloudStorageConfig? cloudStorageConfig,
     DeadLetterPolicy? deadLetterPolicy,
+    bool? detached,
+    bool? enableExactlyOnceDelivery,
     bool? enableMessageOrdering,
     ExpirationPolicy? expirationPolicy,
     String? filter,
     Map<String, String>? labels,
     Duration? messageRetentionDuration,
+    Iterable<MessageTransform>? messageTransforms,
     PushConfig? pushConfig,
     bool? retainAckedMessages,
     int retries = 5,
     RetryPolicy? retryPolicy,
+    Subscription_State? state,
     String? subscription,
+    Map<String, String>? tags,
     required String topic,
     Duration? topicMessageRetentionDuration,
   }) async {
@@ -212,14 +259,20 @@ class PubsubClient {
           final result = await _subscriberClient.createSubscription(
             Subscription(
               ackDeadlineSeconds: ackDeadlineSeconds,
+              analyticsHubSubscriptionInfo: analyticsHubSubscriptionInfo,
+              bigqueryConfig: bigqueryConfig,
+              cloudStorageConfig: cloudStorageConfig,
               deadLetterPolicy: deadLetterPolicy,
+              detached: detached,
+              enableExactlyOnceDelivery: enableExactlyOnceDelivery,
               enableMessageOrdering: enableMessageOrdering,
               expirationPolicy: expirationPolicy,
               filter: filter,
-              labels: labels,
+              labels: labels?.entries,
               messageRetentionDuration: messageRetentionDuration == null
                   ? null
                   : GrpcProtobufConvert.toDuration(messageRetentionDuration),
+              messageTransforms: messageTransforms,
               name: subscription == null
                   ? null
                   : subscription.startsWith('projects/')
@@ -228,6 +281,8 @@ class PubsubClient {
               pushConfig: pushConfig,
               retainAckedMessages: retainAckedMessages,
               retryPolicy: retryPolicy,
+              state: state,
+              tags: tags?.entries,
               topic: topic.startsWith('projects/')
                   ? topic
                   : 'projects/$_projectId/topics/$topic',
@@ -257,12 +312,17 @@ class PubsubClient {
   /// topic.  The expected format is
   /// `projects/*/locations/*/keyRings/*/cryptoKeys/*`.
   Future<Topic> createTopic({
-    Map<String, String>? labels,
-    MessageStoragePolicy? messageStoragePolicy,
+    IngestionDataSourceSettings? ingestionDataSourceSettings,
     String? kmsKeyName,
-    int retries = 5,
-    SchemaSettings? schemaSettings,
+    Map<String, String>? labels,
     Duration? messageRetentionDuration,
+    MessageStoragePolicy? messageStoragePolicy,
+    Iterable<MessageTransform>? messageTransform,
+    int retries = 5,
+    bool? satisfiesPzs,
+    SchemaSettings? schemaSettings,
+    Topic_State? state,
+    Map<String, String>? tags,
     required String topic,
   }) async {
     assert(_initialized);
@@ -274,15 +334,20 @@ class PubsubClient {
             name: topic.startsWith('projects/')
                 ? topic
                 : 'projects/$_projectId/topics/$topic',
-            labels: labels,
-            messageStoragePolicy: messageStoragePolicy,
+            ingestionDataSourceSettings: ingestionDataSourceSettings,
             kmsKeyName: kmsKeyName,
-            schemaSettings: schemaSettings,
+            labels: labels?.entries,
             messageRetentionDuration: messageRetentionDuration == null
                 ? null
                 : GrpcProtobufConvert.toDuration(
                     messageRetentionDuration,
                   ),
+            messageStoragePolicy: messageStoragePolicy,
+            messageTransforms: messageTransform,
+            satisfiesPzs: satisfiesPzs,
+            schemaSettings: schemaSettings,
+            state: state,
+            tags: tags?.entries,
           );
 
           final result = await _publisherClient.createTopic(request);
@@ -829,7 +894,9 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<List<ReceivedMessage>> pull({
+    bool autoAcknowledge = false,
     required int maxMessages,
+    CallOptions? options,
     int retries = 5,
     required String subscription,
   }) async {
@@ -841,11 +908,22 @@ class PubsubClient {
           final result = await _subscriberClient.pull(
             PullRequest(
               maxMessages: maxMessages,
+              // @deprecated
+              // returnImmediately: bool
               subscription: subscription.startsWith('projects/')
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
             ),
+            options: options,
           );
+
+          if (autoAcknowledge) {
+            final ackIds = result.receivedMessages.map((m) => m.ackId);
+
+            if (ackIds.isNotEmpty) {
+              await acknowledge(ackIds: ackIds, subscription: subscription);
+            }
+          }
 
           return result;
         },
@@ -870,7 +948,9 @@ class PubsubClient {
   Future<SeekResponse> seek({
     required int maxMessages,
     int retries = 5,
+    String? snapshot,
     required String subscription,
+    DateTime? time,
   }) async {
     assert(_initialized);
     _logger.fine('[seek]: start -- [$subscription]');
@@ -879,9 +959,11 @@ class PubsubClient {
         executor: () async {
           final result = await _subscriberClient.seek(
             SeekRequest(
+              snapshot: snapshot,
               subscription: subscription.startsWith('projects/')
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
+              time: time == null ? null : GrpcProtobufConvert.toTimestamp(time),
             ),
           );
 
@@ -894,128 +976,53 @@ class PubsubClient {
     }
   }
 
-  /// Establishes a stream with the server, which sends messages down to the
-  /// client.  The client streams acknowledgements and ack deadline
-  /// modifications back to the server.  The server will close the stream and
-  /// return the status on any error.  The server may close the stream with
-  /// status `UNAVAILABLE` to reassign server-side resources, in which case, the
-  /// client should re-establish the stream.  Flow control can be achieved by
-  /// configuring the underlying RPC channel.
-  ///
-  /// The [connectionTtl] is the maximum amount of time to allow a single
-  /// connection to remain open.  As connections may close without any notice,
-  /// this value ensures that the stream can be re-established before messages
-  /// may have expired and ensure they are consistently received.  While it is
-  /// not recommended to disable the periodic reconnect, you may do so by
-  /// setting the value to [Duration.zero].
-  ///
-  /// For more information on the request, see:
-  /// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#google.pubsub.v1.StreamingPullRequest
-  Future<Stream<StreamingPullResponse>> streamingPull({
-    Duration connectionTtl = const Duration(minutes: 5),
+  Stream<ReceivedMessage> streamingPull({
+    bool autoAcknowledge = false,
+    int maxMessages = 10,
     void Function()? onClosed,
+    CallOptions? options,
     int retries = 5,
-    required Stream<StreamingPullRequest> stream,
-    required StreamingPullRequest subscribeRequest,
-  }) async {
+    required String subscription,
+  }) {
     assert(_initialized);
     _logger.fine('[streamingPull]: start');
 
-    return runZonedGuarded(() async {
-      try {
-        var innerController = StreamController<StreamingPullRequest>();
-        final outerController = StreamController<StreamingPullResponse>();
-        final listener = stream.listen((event) => innerController.add(event));
+    final controller = StreamController<ReceivedMessage>();
 
-        ResponseStream<StreamingPullResponse>? result;
-        StreamSubscription<StreamingPullResponse>? resultListener;
+    final stream = controller.stream;
 
-        late Future<void> Function() onCancel;
-        Timer? reconnectTimer;
+    final timeout = options?.timeout ?? const Duration(seconds: 60);
 
-        outerController.onCancel = () {
-          reconnectTimer?.cancel();
-          resultListener?.cancel();
-          result?.cancel();
-          innerController.close();
-          outerController.close();
-          listener.cancel();
+    void pullMessages() async {
+      final messages = await pull(
+        autoAcknowledge: autoAcknowledge,
+        maxMessages: maxMessages,
+        options: options ?? CallOptions(timeout: timeout),
+        subscription: subscription,
+      );
 
-          if (onClosed != null) {
-            onClosed();
-          }
-        };
-
-        Future<void> connect() async {
-          await _executeStream<ResponseStream<StreamingPullResponse>>(
-            executor: () async {
-              innerController.onCancel = null;
-
-              // ignore: unawaited_futures
-              innerController.close();
-
-              innerController = StreamController<StreamingPullRequest>();
-              innerController.onCancel = onCancel;
-
-              final reset =
-                  _subscriberClient.streamingPull(innerController.stream);
-              result = reset;
-              resultListener = reset.listen((event) {
-                outerController.add(event);
-              });
-              _subscriptions.add(resultListener!);
-              innerController.add(subscribeRequest);
-
-              return reset;
-            },
-            retries: retries,
-          );
+      if (!controller.isClosed) {
+        for (final message in messages) {
+          controller.add(message);
         }
-
-        innerController.add(subscribeRequest);
-        onCancel = () async {
-          if (!innerController.isClosed) {
-            _logger.finer('[streamingPull]: connection closed; retrying');
-
-            try {
-              await connect();
-              _logger.finer('[streamingPull]: reconnected');
-            } catch (e, stack) {
-              _logger.severe(
-                '[streamingPull]: Error trying to connect',
-                e,
-                stack,
-              );
-            }
-          }
-        };
-
-        await connect();
-
-        if (connectionTtl.inMilliseconds > 0) {
-          reconnectTimer = Timer.periodic(connectionTtl, (timer) async {
-            _logger.finer('[streamingPull]: TTL exceeded, reconnecting');
-
-            try {
-              await connect();
-              _logger.finer('[streamingPull]: reconnected');
-            } catch (e, stack) {
-              _logger.severe(
-                '[streamingPull]: Error trying to connect',
-                e,
-                stack,
-              );
-            }
-          });
-        }
-
-        return outerController.stream;
-      } finally {
-        _logger.fine('[streamingPull]: complete');
       }
-    }, (e, stack) {
-      _logger.severe('[streamingPull]: uncaught error encountered', e, stack);
-    })!;
+    }
+
+    final timer = Timer.periodic(timeout, (_) async {
+      pullMessages();
+    });
+
+    controller.onCancel = () {
+      controller.close();
+      timer.cancel();
+      _logger.fine('[streamingPull]: canceled');
+    };
+
+    pullMessages();
+
+    _logger.fine('[streamingPull]: complete');
+
+    return stream;
   }
 
   /// Updates an existing snapshot.  Snapshots are used in `Seek` operations,
@@ -1165,48 +1172,6 @@ class PubsubClient {
     return result;
   }
 
-  Future<T> _executeStream<T extends ResponseStream>({
-    required Future<T> Function() executor,
-    required int retries,
-  }) async {
-    T? result;
-
-    var delay = const Duration(milliseconds: 500);
-    var attempts = 1;
-    while (result == null) {
-      final completer = Completer<T>();
-      Completer<T>? innerCompleter = completer;
-      try {
-        // ignore: unawaited_futures
-        runZonedGuarded(() async {
-          innerCompleter?.complete(await executor());
-          innerCompleter = null;
-        }, (e, stack) {
-          innerCompleter?.completeError(e, stack);
-          innerCompleter = null;
-        });
-
-        result = await completer.future;
-        break;
-      } catch (e) {
-        await _reconnect();
-        attempts++;
-        if (attempts < retries) {
-          await Future.delayed(delay);
-
-          delay = Duration(milliseconds: delay.inMilliseconds * 2);
-          _logger.fine(
-            '[execute]: Error attempting to execute function, attempt [$attempts / $retries].',
-          );
-        } else {
-          rethrow;
-        }
-      }
-    }
-
-    return result;
-  }
-
   Future<void> _reconnect({
     bool closePrevious = true,
   }) async {
@@ -1219,25 +1184,72 @@ class PubsubClient {
     }
     _subscriptions.clear();
 
-    final authenticator = ServiceAccountAuthenticator(
-      _serviceAccountJson,
-      _scopes,
-    );
-    _projectId = authenticator.projectId!;
+    final serviceAccount = _serviceAccountJson;
+
+    final authenticator = serviceAccount == null
+        ? null
+        : ServiceAccountAuthenticator(
+            serviceAccount,
+            _scopes,
+          );
+    if (authenticator != null) {
+      _projectId = authenticator.projectId!;
+    }
 
     _channel = GrpcOrGrpcWebClientChannel.grpc(
       _host,
+      options: ChannelOptions(credentials: ChannelCredentials.insecure()),
       port: _port,
     );
 
+    final callOptions = authenticator?.toCallOptions ??
+        CallOptions(metadata: {
+          'authorization': 'Bearer owner',
+        });
     _publisherClient = PublisherClient(
       _channel,
-      options: authenticator.toCallOptions,
+      options: callOptions,
     );
 
     _subscriberClient = SubscriberClient(
       _channel,
-      options: authenticator.toCallOptions,
+      options: callOptions,
     );
+  }
+}
+
+class OwnerClient extends http.BaseClient {
+  OwnerClient({
+    this.baseClient,
+  });
+
+  final http.Client? baseClient;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final client = baseClient ?? http.Client();
+    try {
+      final req = http.Request(
+        request.method,
+        request.url,
+      );
+
+      req.followRedirects = request.followRedirects;
+      req.persistentConnection = request.persistentConnection;
+      req.bodyBytes = await request.finalize().toBytes();
+
+      req.headers.addAll({
+        ...request.headers,
+        'Authorization': 'Bearer owner',
+      });
+
+      final response = client.send(req);
+
+      return response;
+    } finally {
+      if (client != baseClient) {
+        client.close();
+      }
+    }
   }
 }

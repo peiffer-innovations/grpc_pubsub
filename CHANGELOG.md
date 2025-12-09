@@ -1,3 +1,9 @@
+## [3.0.0] - December 9th, 2025
+
+* Updated dependencies
+* Swapped out the streaming pull implementation to make it stream using the existing `pull` to harmonize the APIs
+
+
 ## [2.0.0] - March 1st, 2025
 
 * Dusted off and brought back to life
