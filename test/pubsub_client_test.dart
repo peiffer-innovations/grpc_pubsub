@@ -12,15 +12,6 @@ import 'package:logging/logging.dart';
 import 'package:test/test.dart';
 
 Future<void> main() async {
-  final file = File('secrets/service_account.json');
-
-  String? serviceAccount;
-  if (file.existsSync()) {
-    serviceAccount = file.readAsStringSync();
-  } else {
-    serviceAccount = Platform.environment['SERVICE_ACCOUNT'];
-  }
-
   Logger.root.onRecord.listen((record) {
     print('${record.level.name}: ${record.time}: ${record.message}');
     if (record.error != null) {
@@ -32,22 +23,17 @@ Future<void> main() async {
   });
   Logger.root.level = Level.FINEST;
 
-  final client = serviceAccount == null
-      ? PubsubClient.emulatorsOwner(projectId: 'unit')
-      : PubsubClient(serviceAccountJson: serviceAccount);
+  final client = PubsubClient.emulatorsOwner(projectId: 'unit');
   await client.initialize();
 
-  FirebaseEmulators? emulators;
-  if (serviceAccount == null) {
-    emulators = FirebaseEmulators();
-  }
+  final emulators = FirebaseEmulators();
 
   setUpAll(() async {
-    await emulators?.start();
+    await emulators.start();
   });
 
   tearDownAll(() async {
-    await emulators?.stop();
+    await emulators.stop();
   });
 
   setUp(() async {
@@ -203,8 +189,13 @@ class FirebaseEmulators {
     if (launchEmulators) {
       final completer = Completer();
       print('Checking for firebase emulators');
-      final exit = Process.runSync('firebase', ['--version']).exitCode;
-      if (exit != 0) {
+      try {
+        final exit = Process.runSync('firebase', ['--version']).exitCode;
+        if (exit != 0) {
+          print('Installing firebase emulators');
+          Process.runSync('npm', ['install', '-g', 'firebase-tools']);
+        }
+      } catch (e) {
         print('Installing firebase emulators');
         Process.runSync('npm', ['install', '-g', 'firebase-tools']);
       }
