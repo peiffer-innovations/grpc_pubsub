@@ -894,7 +894,9 @@ class PubsubClient {
   /// quantified name in the format:
   /// `projects/{project}/subscriptions/{subscription}`.
   Future<List<ReceivedMessage>> pull({
+    bool autoAcknowledge = false,
     required int maxMessages,
+    CallOptions? options,
     int retries = 5,
     required String subscription,
   }) async {
@@ -912,7 +914,16 @@ class PubsubClient {
                   ? subscription
                   : 'projects/$_projectId/subscriptions/$subscription',
             ),
+            options: options,
           );
+
+          if (autoAcknowledge) {
+            final ackIds = result.receivedMessages.map((m) => m.ackId);
+
+            if (ackIds.isNotEmpty) {
+              await acknowledge(ackIds: ackIds, subscription: subscription);
+            }
+          }
 
           return result;
         },
@@ -965,128 +976,53 @@ class PubsubClient {
     }
   }
 
-  /// Establishes a stream with the server, which sends messages down to the
-  /// client.  The client streams acknowledgements and ack deadline
-  /// modifications back to the server.  The server will close the stream and
-  /// return the status on any error.  The server may close the stream with
-  /// status `UNAVAILABLE` to reassign server-side resources, in which case, the
-  /// client should re-establish the stream.  Flow control can be achieved by
-  /// configuring the underlying RPC channel.
-  ///
-  /// The [connectionTtl] is the maximum amount of time to allow a single
-  /// connection to remain open.  As connections may close without any notice,
-  /// this value ensures that the stream can be re-established before messages
-  /// may have expired and ensure they are consistently received.  While it is
-  /// not recommended to disable the periodic reconnect, you may do so by
-  /// setting the value to [Duration.zero].
-  ///
-  /// For more information on the request, see:
-  /// https://cloud.google.com/pubsub/docs/reference/rpc/google.pubsub.v1#google.pubsub.v1.StreamingPullRequest
-  Future<Stream<StreamingPullResponse>> streamingPull({
-    Duration connectionTtl = const Duration(minutes: 5),
+  Stream<ReceivedMessage> streamingPull({
+    bool autoAcknowledge = false,
+    int maxMessages = 10,
     void Function()? onClosed,
+    CallOptions? options,
     int retries = 5,
-    required Stream<StreamingPullRequest> stream,
-    required StreamingPullRequest subscribeRequest,
-  }) async {
+    required String subscription,
+  }) {
     assert(_initialized);
     _logger.fine('[streamingPull]: start');
 
-    return runZonedGuarded(() async {
-      try {
-        var innerController = StreamController<StreamingPullRequest>();
-        final outerController = StreamController<StreamingPullResponse>();
-        final listener = stream.listen((event) => innerController.add(event));
+    final controller = StreamController<ReceivedMessage>();
 
-        ResponseStream<StreamingPullResponse>? result;
-        StreamSubscription<StreamingPullResponse>? resultListener;
+    final stream = controller.stream;
 
-        late Future<void> Function() onCancel;
-        Timer? reconnectTimer;
+    final timeout = options?.timeout ?? const Duration(seconds: 60);
 
-        outerController.onCancel = () {
-          reconnectTimer?.cancel();
-          resultListener?.cancel();
-          result?.cancel();
-          innerController.close();
-          outerController.close();
-          listener.cancel();
+    void pullMessages() async {
+      final messages = await pull(
+        autoAcknowledge: autoAcknowledge,
+        maxMessages: maxMessages,
+        options: options ?? CallOptions(timeout: timeout),
+        subscription: subscription,
+      );
 
-          if (onClosed != null) {
-            onClosed();
-          }
-        };
-
-        Future<void> connect() async {
-          await _executeStream<ResponseStream<StreamingPullResponse>>(
-            executor: () async {
-              innerController.onCancel = null;
-
-              // ignore: unawaited_futures
-              innerController.close();
-
-              innerController = StreamController<StreamingPullRequest>();
-              innerController.onCancel = onCancel;
-
-              final reset =
-                  _subscriberClient.streamingPull(innerController.stream);
-              result = reset;
-              resultListener = reset.listen((event) {
-                outerController.add(event);
-              });
-              _subscriptions.add(resultListener!);
-              innerController.add(subscribeRequest);
-
-              return reset;
-            },
-            retries: retries,
-          );
+      if (!controller.isClosed) {
+        for (final message in messages) {
+          controller.add(message);
         }
-
-        innerController.add(subscribeRequest);
-        onCancel = () async {
-          if (!innerController.isClosed) {
-            _logger.finer('[streamingPull]: connection closed; retrying');
-
-            try {
-              await connect();
-              _logger.finer('[streamingPull]: reconnected');
-            } catch (e, stack) {
-              _logger.severe(
-                '[streamingPull]: Error trying to connect',
-                e,
-                stack,
-              );
-            }
-          }
-        };
-
-        await connect();
-
-        if (connectionTtl.inMilliseconds > 0) {
-          reconnectTimer = Timer.periodic(connectionTtl, (timer) async {
-            _logger.finer('[streamingPull]: TTL exceeded, reconnecting');
-
-            try {
-              await connect();
-              _logger.finer('[streamingPull]: reconnected');
-            } catch (e, stack) {
-              _logger.severe(
-                '[streamingPull]: Error trying to connect',
-                e,
-                stack,
-              );
-            }
-          });
-        }
-
-        return outerController.stream;
-      } finally {
-        _logger.fine('[streamingPull]: complete');
       }
-    }, (e, stack) {
-      _logger.severe('[streamingPull]: uncaught error encountered', e, stack);
-    })!;
+    }
+
+    final timer = Timer.periodic(timeout, (_) async {
+      pullMessages();
+    });
+
+    controller.onCancel = () {
+      controller.close();
+      timer.cancel();
+      _logger.fine('[streamingPull]: canceled');
+    };
+
+    pullMessages();
+
+    _logger.fine('[streamingPull]: complete');
+
+    return stream;
   }
 
   /// Updates an existing snapshot.  Snapshots are used in `Seek` operations,
@@ -1236,48 +1172,6 @@ class PubsubClient {
     return result;
   }
 
-  Future<T> _executeStream<T extends ResponseStream>({
-    required Future<T> Function() executor,
-    required int retries,
-  }) async {
-    T? result;
-
-    var delay = const Duration(milliseconds: 500);
-    var attempts = 1;
-    while (result == null) {
-      final completer = Completer<T>();
-      Completer<T>? innerCompleter = completer;
-      try {
-        // ignore: unawaited_futures
-        runZonedGuarded(() async {
-          innerCompleter?.complete(await executor());
-          innerCompleter = null;
-        }, (e, stack) {
-          innerCompleter?.completeError(e, stack);
-          innerCompleter = null;
-        });
-
-        result = await completer.future;
-        break;
-      } catch (e) {
-        await _reconnect();
-        attempts++;
-        if (attempts < retries) {
-          await Future.delayed(delay);
-
-          delay = Duration(milliseconds: delay.inMilliseconds * 2);
-          _logger.fine(
-            '[execute]: Error attempting to execute function, attempt [$attempts / $retries].',
-          );
-        } else {
-          rethrow;
-        }
-      }
-    }
-
-    return result;
-  }
-
   Future<void> _reconnect({
     bool closePrevious = true,
   }) async {
@@ -1304,11 +1198,14 @@ class PubsubClient {
 
     _channel = GrpcOrGrpcWebClientChannel.grpc(
       _host,
+      options: ChannelOptions(credentials: ChannelCredentials.insecure()),
       port: _port,
     );
 
     final callOptions = authenticator?.toCallOptions ??
-        CallOptions(metadata: {'authorization': 'Bearer owner'});
+        CallOptions(metadata: {
+          'authorization': 'Bearer owner',
+        });
     _publisherClient = PublisherClient(
       _channel,
       options: callOptions,
